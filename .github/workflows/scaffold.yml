@@ -1,0 +1,519 @@
+name: Scaffold Galinhos Digital
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  scaffold:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create backend structure and files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p server/src/routes server/src/middleware server/src/utils server/prisma
+
+          cat > server/package.json <<'EOF'
+          {
+            "name": "galinhos-server",
+            "private": true,
+            "type": "module",
+            "scripts": {
+              "dev": "tsx watch src/index.ts",
+              "build": "tsc",
+              "start": "node dist/index.js",
+              "prisma:generate": "prisma generate",
+              "prisma:migrate": "prisma migrate dev --name init",
+              "seed": "tsx prisma/seed.ts"
+            },
+            "dependencies": {
+              "@prisma/client": "^5.19.0",
+              "bcryptjs": "^2.4.3",
+              "cors": "^2.8.5",
+              "dayjs": "^1.11.13",
+              "dotenv": "^16.4.5",
+              "express": "^4.19.2",
+              "helmet": "^7.1.0",
+              "jsonwebtoken": "^9.0.2",
+              "multer": "^1.4.5-lts.1",
+              "zod": "^3.23.8"
+            },
+            "devDependencies": {
+              "prisma": "^5.19.0",
+              "tsx": "^4.19.1",
+              "typescript": "^5.6.3"
+            }
+          }
+          EOF
+
+          cat > server/tsconfig.json <<'EOF'
+          {
+            "compilerOptions": {
+              "target": "ES2020",
+              "module": "ES2022",
+              "moduleResolution": "Bundler",
+              "outDir": "dist",
+              "rootDir": "src",
+              "strict": true,
+              "esModuleInterop": true
+            }
+          }
+          EOF
+
+          cat > server/.env.example <<'EOF'
+          DATABASE_URL="postgresql://postgres:postgres@localhost:5432/galinhos?schema=public"
+          JWT_SECRET="replace_me"
+          PORT=4000
+          EOF
+
+          cat > server/docker-compose.yml <<'EOF'
+          version: "3.8"
+          services:
+            db:
+              image: postgres:16
+              container_name: galinhos_db
+              environment:
+                POSTGRES_PASSWORD: postgres
+                POSTGRES_USER: postgres
+                POSTGRES_DB: galinhos
+              ports: ["5432:5432"]
+              volumes: ["pgdata:/var/lib/postgresql/data"]
+          volumes:
+            pgdata:
+          EOF
+
+          cat > server/prisma/schema.prisma <<'EOF'
+          generator client { provider = "prisma-client-js" }
+          datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+          model Citizen {
+            id        String   @id @default(cuid())
+            cpf       String   @unique
+            name      String
+            phone     String
+            email     String?
+            address   String?
+            consents  Json?
+            createdAt DateTime @default(now())
+            tickets   Ticket[]
+          }
+
+          model StaffUser {
+            id           String   @id @default(cuid())
+            email        String   @unique
+            passwordHash String
+            name         String
+            role         StaffRole
+            secretariat  Secretariat
+            active       Boolean  @default(true)
+            createdAt    DateTime @default(now())
+          }
+
+          enum StaffRole {
+            ADMIN
+            HEALTH_PSF
+            TRANSPORT_MANAGER
+            WORKS_OFFICER
+            SOCIAL_ASSISTANCE
+            EDUCATION
+            TOURISM
+            SPORTS
+            TAXATION
+            OMBUDSMAN
+          }
+
+          enum Secretariat {
+            SAUDE
+            TRANSPORTE
+            OBRAS
+            ASSISTENCIA
+            EDUCACAO
+            TURISMO
+            ESPORTE
+            TRIBUTACAO
+            OUVIDORIA
+            RH
+          }
+
+          model Ticket {
+            id            String   @id @default(cuid())
+            number        String   @unique
+            type          TicketType
+            secretariat   Secretariat
+            status        TicketStatus @default(NEW)
+            priority      Int      @default(3)
+            citizenId     String
+            citizen       Citizen  @relation(fields: [citizenId], references: [id])
+            assignedToId  String?
+            assignedTo    StaffUser? @relation(fields: [assignedToId], references: [id])
+            psfAuthorized Boolean?
+            fields        Json?
+            attachments   Json?
+            history       Json?
+            createdAt     DateTime @default(now())
+            updatedAt     DateTime @updatedAt
+            appointment   Appointment?
+          }
+
+          enum TicketType { HEALTH TRANSPORT WORKS SOCIAL EDUCATION TOURISM SPORTS TAX OMBUDSMAN HR }
+          enum TicketStatus { NEW TRIAGE IN_PROGRESS WAITING_USER SCHEDULED RESOLVED CLOSED }
+
+          model ScheduleSlot {
+            id        String   @id @default(cuid())
+            module    String
+            code      String
+            date      DateTime
+            start     DateTime
+            end       DateTime
+            capacity  Int      @default(1)
+            taken     Int      @default(0)
+            location  String?
+            appointments Appointment[]
+          }
+
+          model Appointment {
+            id          String   @id @default(cuid())
+            ticketId    String   @unique
+            slotId      String
+            confirmedAt DateTime @default(now())
+            checkIn     DateTime?
+            noShow      Boolean  @default(false)
+            ticket      Ticket   @relation(fields: [ticketId], references: [id])
+            slot        ScheduleSlot @relation(fields: [slotId], references: [id])
+          }
+
+          model BoatRoster {
+            id        String   @id @default(cuid())
+            date      DateTime @unique
+            boatman   String
+            phone     String
+            shift     String?
+            notes     String?
+            createdAt DateTime @default(now())
+          }
+
+          model AuditLog {
+            id      String   @id @default(cuid())
+            actorId String?
+            action  String
+            target  String
+            diff    Json?
+            at      DateTime @default(now())
+          }
+          EOF
+
+          cat > server/src/index.ts <<'EOF'
+          import "dotenv/config";
+          import express from "express";
+          import cors from "cors";
+          import helmet from "helmet";
+          import { authRouter } from "./routes/auth.js";
+          import { ticketRouter } from "./routes/tickets.js";
+          import { healthRouter } from "./routes/health.js";
+          import { transportRouter } from "./routes/transport.js";
+          import { webhookRouter } from "./routes/webhooks.js";
+
+          const app = express();
+          app.use(helmet());
+          app.use(cors({ origin: true, credentials: true }));
+          app.use(express.json({ limit: "5mb" }));
+
+          app.get("/healthcheck", (_req, res) => res.json({ ok: true }));
+
+          app.use("/auth", authRouter);
+          app.use("/tickets", ticketRouter);
+          app.use("/health", healthRouter);
+          app.use("/transport", transportRouter);
+          app.use("/webhooks", webhookRouter);
+
+          const port = process.env.PORT || 4000;
+          app.listen(port, () => console.log(\`Server listening on :\${port}\`));
+          EOF
+
+          cat > server/src/utils/jwt.ts <<'EOF'
+          import jwt from "jsonwebtoken";
+          const secret = process.env.JWT_SECRET || "dev";
+          export function sign(payload: object, expiresIn = "7d") {
+            return jwt.sign(payload, secret, { expiresIn });
+          }
+          export function verify<T = any>(token: string) {
+            return jwt.verify(token, secret) as T;
+          }
+          EOF
+
+          cat > server/src/middleware/auth.ts <<'EOF'
+          import { Request, Response, NextFunction } from "express";
+          import { verify } from "../utils/jwt.js";
+          export function requireStaff(req: Request, res: Response, next: NextFunction) {
+            const hdr = req.headers.authorization;
+            if (!hdr) return res.status(401).json({ error: "Missing token" });
+            try {
+              const data = verify(hdr.replace("Bearer ", ""));
+              (req as any).user = data;
+              next();
+            } catch {
+              return res.status(401).json({ error: "Invalid token" });
+            }
+          }
+          EOF
+
+          cat > server/src/routes/auth.ts <<'EOF'
+          import { Router } from "express";
+          import { PrismaClient } from "@prisma/client";
+          import bcrypt from "bcryptjs";
+          import { sign } from "../utils/jwt.js";
+          const prisma = new PrismaClient();
+          export const authRouter = Router();
+
+          // Citizen OTP-like login (mock)
+          authRouter.post("/citizen/login", async (req, res) => {
+            const { cpf, phone, name } = req.body;
+            if (!cpf || !phone) return res.status(400).json({ error: "cpf, phone required" });
+            const citizen = await prisma.citizen.upsert({
+              where: { cpf },
+              create: { cpf, phone, name: name ?? "Cidadão" },
+              update: { phone, name: name ?? undefined }
+            });
+            const token = sign({ sub: citizen.id, kind: "citizen" }, "30d");
+            res.json({ token, citizen });
+          });
+
+          // Staff login (email/password)
+          authRouter.post("/staff/login", async (req, res) => {
+            const { email, password } = req.body;
+            const u = await prisma.staffUser.findUnique({ where: { email } });
+            if (!u) return res.status(401).json({ error: "Invalid credentials" });
+            const ok = await bcrypt.compare(password, u.passwordHash);
+            if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+            const token = sign({ sub: u.id, role: u.role, secretariat: u.secretariat, kind: "staff" }, "7d");
+            res.json({ token, staff: { id: u.id, name: u.name, role: u.role, secretariat: u.secretariat } });
+          });
+          EOF
+
+          cat > server/src/routes/tickets.ts <<'EOF'
+          import { Router } from "express";
+          import { PrismaClient, TicketStatus } from "@prisma/client";
+          import { requireStaff } from "../middleware/auth.js";
+          const prisma = new PrismaClient();
+          export const ticketRouter = Router();
+
+          // Create ticket (citizen or webhook)
+          ticketRouter.post("/", async (req, res) => {
+            const { type, secretariat, fields, attachments, citizen } = req.body;
+            if (!citizen?.cpf) return res.status(400).json({ error: "citizen.cpf required" });
+            const c = await prisma.citizen.upsert({
+              where: { cpf: citizen.cpf },
+              update: {
+                name: citizen.name ?? undefined,
+                phone: citizen.phone ?? undefined,
+                email: citizen.email ?? undefined,
+                address: citizen.address ?? undefined
+              },
+              create: { cpf: citizen.cpf, name: citizen.name ?? "Cidadão", phone: citizen.phone ?? "" }
+            });
+            const number = "GD-" + Math.floor(1e6 + Math.random() * 9e6).toString();
+            const t = await prisma.ticket.create({
+              data: {
+                number, type, secretariat, citizenId: c.id,
+                fields: fields ?? {}, attachments: attachments ?? [],
+                history: [{ at: new Date().toISOString(), action: "OPEN" }]
+              }
+            });
+            res.json({ ticket: t });
+          });
+
+          // List tickets (staff)
+          ticketRouter.get("/", requireStaff, async (req, res) => {
+            const { status, type, secretariat } = req.query;
+            const tickets = await prisma.ticket.findMany({
+              where: {
+                status: status ? (status as TicketStatus) : undefined,
+                type: type ? (type as any) : undefined,
+                secretariat: secretariat ? (secretariat as any) : undefined
+              },
+              orderBy: { createdAt: "desc" }
+            });
+            res.json({ tickets });
+          });
+
+          // Update ticket
+          ticketRouter.patch("/:id", requireStaff, async (req, res) => {
+            const { id } = req.params;
+            const { status, assignedToId, psfAuthorized, fields } = req.body;
+            const t = await prisma.ticket.update({
+              where: { id },
+              data: { status, assignedToId, psfAuthorized, fields }
+            });
+            res.json({ ticket: t });
+          });
+          EOF
+
+          cat > server/src/routes/health.ts <<'EOF'
+          import { Router } from "express";
+          import { PrismaClient } from "@prisma/client";
+          const prisma = new PrismaClient();
+          export const healthRouter = Router();
+
+          healthRouter.get("/specialties", (_req, res) => {
+            res.json({ items: ["Dermatology", "Cardiology", "Pediatrics"] });
+          });
+
+          healthRouter.get("/specialties/:name/slots", async (req, res) => {
+            const { name } = req.params;
+            const { month } = req.query;
+            const slots = await prisma.scheduleSlot.findMany({
+              where: { module: "health", code: name, date: { gte: new Date(`${month}-01`), lt: new Date(`${month}-31`) } },
+              orderBy: { date: "asc" }
+            });
+            res.json({ slots });
+          });
+
+          healthRouter.post("/appointments", async (req, res) => {
+            const { ticketId, slotId } = req.body;
+            const slot = await prisma.scheduleSlot.findUnique({ where: { id: slotId } });
+            if (!slot) return res.status(404).json({ error: "slot not found" });
+            if (slot.taken >= slot.capacity) return res.status(400).json({ error: "slot full" });
+
+            const appt = await prisma.$transaction(async (tx) => {
+              const a = await tx.appointment.create({ data: { ticketId, slotId } });
+              await tx.scheduleSlot.update({ where: { id: slotId }, data: { taken: { increment: 1 } } });
+              await tx.ticket.update({ where: { id: ticketId }, data: { status: "SCHEDULED" } });
+              return a;
+            });
+            res.json({ appointment: appt });
+          });
+          EOF
+
+          cat > server/src/routes/transport.ts <<'EOF'
+          import { Router } from "express";
+          import { PrismaClient } from "@prisma/client";
+          const prisma = new PrismaClient();
+          export const transportRouter = Router();
+
+          // Public: today/tomorrow boat roster
+          transportRouter.get("/boat-roster", async (req, res) => {
+            const { date } = req.query;
+            const d = date ? new Date(String(date)) : new Date();
+            const todayDate = new Date(d.toDateString());
+            const tomorrowDate = new Date(d.toDateString()); tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+
+            const today = await prisma.boatRoster.findUnique({ where: { date: todayDate } }).catch(() => null);
+            const tomorrow = await prisma.boatRoster.findUnique({ where: { date: tomorrowDate } }).catch(() => null);
+            res.json({ today, tomorrow });
+          });
+
+          // Staff: set roster
+          transportRouter.post("/boat-roster", async (req, res) => {
+            const { date, boatman, phone, shift, notes } = req.body;
+            const r = await prisma.boatRoster.upsert({
+              where: { date: new Date(new Date(date).toDateString()) },
+              update: { boatman, phone, shift, notes },
+              create: { date: new Date(new Date(date).toDateString()), boatman, phone, shift, notes }
+            });
+            res.json({ roster: r });
+          });
+          EOF
+
+          cat > server/src/routes/webhooks.ts <<'EOF'
+          import { Router } from "express";
+          import { PrismaClient } from "@prisma/client";
+          const prisma = new PrismaClient();
+          export const webhookRouter = Router();
+
+          // Inbound from WhatsApp/n8n -> create ticket
+          webhookRouter.post("/whatsapp-inbound", async (req, res) => {
+            const { phone, cpf, name, message, attachments, type, secretariat, fields } = req.body;
+            if (!cpf || !phone) return res.status(400).json({ error: "cpf and phone required" });
+
+            const citizen = await prisma.citizen.upsert({
+              where: { cpf },
+              update: { phone, name: name ?? undefined },
+              create: { cpf, phone, name: name ?? "Cidadão" }
+            });
+
+            const number = "GD-" + Math.floor(1e6 + Math.random() * 9e6).toString();
+            const t = await prisma.ticket.create({
+              data: {
+                number, type, secretariat,
+                citizenId: citizen.id,
+                fields: { ...(fields ?? {}), message },
+                attachments: attachments ?? [],
+                history: [{ at: new Date().toISOString(), action: "OPEN", source: "whatsapp" }]
+              }
+            });
+
+            res.json({ ok: true, ticket_number: t.number, ticket_id: t.id, next: "app://ticket/" + t.id });
+          });
+          EOF
+
+          cat > server/prisma/seed.ts <<'EOF'
+          import { PrismaClient } from "@prisma/client";
+          import bcrypt from "bcryptjs";
+          const prisma = new PrismaClient();
+
+          async function main() {
+            const pwd = await bcrypt.hash("admin123", 10);
+            await prisma.staffUser.upsert({
+              where: { email: "admin@galinhos.gov.br" },
+              update: {},
+              create: { email: "admin@galinhos.gov.br", passwordHash: pwd, name: "Admin", role: "ADMIN", secretariat: "SAUDE" }
+            });
+
+            // Health demo slots: Dermatology 1st & 3rd Thursdays 08–12 (20 capacity) current month
+            const now = new Date();
+            const month = now.getMonth();
+            const year = now.getFullYear();
+            const thursdays: Date[] = [];
+            for (let d = 1; d <= 31; d++) {
+              const dt = new Date(year, month, d);
+              if (dt.getMonth() === month && dt.getDay() === 4) thursdays.push(dt);
+            }
+            const target = [thursdays[0], thursdays[2]].filter(Boolean);
+            for (const dt of target) {
+              const start = new Date(dt); start.setHours(8, 0, 0, 0);
+              const end = new Date(dt); end.setHours(12, 0, 0, 0);
+              await prisma.scheduleSlot.create({
+                data: { module: "health", code: "Dermatology", date: dt, start, end, capacity: 20 }
+              });
+            }
+
+            // Boat roster demo today/tomorrow
+            const t0 = new Date(); t0.setHours(0,0,0,0);
+            const t1 = new Date(t0); t1.setDate(t0.getDate()+1);
+            await prisma.boatRoster.upsert({
+              where: { date: t0 },
+              update: {},
+              create: { date: t0, boatman: "Zé Barqueiro", phone: "+55 84 90000-0001", shift: "08-18" }
+            });
+            await prisma.boatRoster.upsert({
+              where: { date: t1 },
+              update: {},
+              create: { date: t1, boatman: "Naldo do Rio", phone: "+55 84 90000-0002", shift: "08-18" }
+            });
+
+            console.log("Seed done.");
+          }
+
+          main().finally(() => prisma.$disconnect());
+          EOF
+
+      - name: Commit scaffold (if changes)
+        run: |
+          set -e
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "chore(server): scaffold backend (Express + Prisma + JWT + webhooks)"
+            git push
+          else
+            echo "No changes to commit."
+          fi
