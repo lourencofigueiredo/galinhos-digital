@@ -1,13 +1,117 @@
 generator client { provider = "prisma-client-js" }
 datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
-model Citizen { id String @id @default(cuid()) cpf String @unique name String phone String email String? address String? consents Json? createdAt DateTime @default(now()) tickets Ticket[] }
-model StaffUser { id String @id @default(cuid()) email String @unique passwordHash String name String role StaffRole secretariat Secretariat active Boolean @default(true) createdAt DateTime @default(now()) }
-enum StaffRole { ADMIN HEALTH_PSF TRANSPORT_MANAGER WORKS_OFFICER SOCIAL_ASSISTANCE EDUCATION TOURISM SPORTS TAXATION OMBUDSMAN }
-enum Secretariat { SAUDE TRANSPORTE OBRAS ASSISTENCIA EDUCACAO TURISMO ESPORTE TRIBUTACAO OUVIDORIA RH }
-model Ticket { id String @id @default(cuid()) number String @unique type TicketType secretariat Secretariat status TicketStatus @default(NEW) priority Int @default(3) citizenId String citizen Citizen @relation(fields:[citizenId], references:[id]) assignedToId String? assignedTo StaffUser? @relation(fields:[assignedToId], references:[id]) psfAuthorized Boolean? fields Json? attachments Json? history Json? createdAt DateTime @default(now()) updatedAt DateTime @updatedAt appointment Appointment? }
+
+model Citizen {
+  id        String   @id @default(cuid())
+  cpf       String   @unique
+  name      String
+  phone     String
+  email     String?
+  address   String?
+  consents  Json?
+  createdAt DateTime @default(now())
+  tickets   Ticket[]
+}
+
+model StaffUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         StaffRole
+  secretariat  Secretariat
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+}
+
+enum StaffRole {
+  ADMIN
+  HEALTH_PSF
+  TRANSPORT_MANAGER
+  WORKS_OFFICER
+  SOCIAL_ASSISTANCE
+  EDUCATION
+  TOURISM
+  SPORTS
+  TAXATION
+  OMBUDSMAN
+}
+
+enum Secretariat {
+  SAUDE
+  TRANSPORTE
+  OBRAS
+  ASSISTENCIA
+  EDUCACAO
+  TURISMO
+  ESPORTE
+  TRIBUTACAO
+  OUVIDORIA
+  RH
+}
+
+model Ticket {
+  id            String   @id @default(cuid())
+  number        String   @unique
+  type          TicketType
+  secretariat   Secretariat
+  status        TicketStatus @default(NEW)
+  priority      Int      @default(3)
+  citizenId     String
+  citizen       Citizen  @relation(fields: [citizenId], references: [id])
+  assignedToId  String?
+  assignedTo    StaffUser? @relation(fields: [assignedToId], references: [id])
+  psfAuthorized Boolean?
+  fields        Json?
+  attachments   Json?
+  history       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  appointment   Appointment?
+}
+
 enum TicketType { HEALTH TRANSPORT WORKS SOCIAL EDUCATION TOURISM SPORTS TAX OMBUDSMAN HR }
 enum TicketStatus { NEW TRIAGE IN_PROGRESS WAITING_USER SCHEDULED RESOLVED CLOSED }
-model ScheduleSlot { id String @id @default(cuid()) module String code String date DateTime start DateTime end DateTime capacity Int @default(1) taken Int @default(0) location String? appointments Appointment[] }
-model Appointment { id String @id @default(cuid()) ticketId String @unique slotId String confirmedAt DateTime @default(now()) checkIn DateTime? noShow Boolean @default(false) ticket Ticket @relation(fields:[ticketId], references:[id]) slot ScheduleSlot @relation(fields:[slotId], references:[id]) }
-model BoatRoster { id String @id @default(cuid()) date DateTime @unique boatman String phone String shift String? notes String? createdAt DateTime @default(now()) }
-model AuditLog { id String @id @default(cuid()) actorId String? action String target String diff Json? at DateTime @default(now()) }
+
+model ScheduleSlot {
+  id        String   @id @default(cuid())
+  module    String
+  code      String
+  date      DateTime
+  start     DateTime
+  end       DateTime
+  capacity  Int      @default(1)
+  taken     Int      @default(0)
+  location  String?
+  appointments Appointment[]
+}
+
+model Appointment {
+  id          String   @id @default(cuid())
+  ticketId    String   @unique
+  slotId      String
+  confirmedAt DateTime @default(now())
+  checkIn     DateTime?
+  noShow      Boolean  @default(false)
+  ticket      Ticket   @relation(fields: [ticketId], references: [id])
+  slot        ScheduleSlot @relation(fields: [slotId], references: [id])
+}
+
+model BoatRoster {
+  id        String   @id @default(cuid())
+  date      DateTime @unique
+  boatman   String
+  phone     String
+  shift     String?
+  notes     String?
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id      String   @id @default(cuid())
+  actorId String?
+  action  String
+  target  String
+  diff    Json?
+  at      DateTime @default(now())
+}
