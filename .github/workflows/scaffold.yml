@@ -1,12 +1,14 @@
 name: Scaffold Galinhos Digital
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   scaffold:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,7 +23,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p server/src/routes server/src/middleware server/src/utils server/prisma
+          rm -rf server
+          mkdir -p server/src/{routes,middleware,utils} server/prisma
 
           cat > server/package.json <<'EOF'
           {
@@ -509,7 +512,7 @@ jobs:
 
       - name: Commit scaffold (if changes)
         run: |
-          set -e
+          set -euo pipefail
           if [ -n "$(git status --porcelain)" ]; then
             git add .
             git commit -m "chore(server): scaffold backend (Express + Prisma + JWT + webhooks)"
